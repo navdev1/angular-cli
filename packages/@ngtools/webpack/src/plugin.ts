@@ -25,7 +25,7 @@ export interface AotPluginOptions {
   sourceMap?: boolean;
   tsConfigPath: string;
   basePath?: string;
-  entryModule?: string;
+  entryModule?: string[] | string;
   mainPath?: string;
   typeChecking?: boolean;
   skipCodeGeneration?: boolean;
@@ -40,6 +40,11 @@ export interface AotPluginOptions {
   // Use tsconfig to include path globs.
   exclude?: string | string[];
   compilerOptions?: ts.CompilerOptions;
+}
+
+export interface EntryModule {
+  path: string;
+  className: string;
 }
 
 
@@ -59,7 +64,7 @@ export class AotPlugin implements Tapable {
   private _discoveredLazyRoutes: LazyRouteMap;
   private _lazyRoutes: LazyRouteMap = Object.create(null);
   private _tsConfigPath: string;
-  private _entryModule: string;
+  private _entryModules: string[];
 
   private _donePromise: Promise<void> | null;
   private _compilation: any = null;
@@ -90,11 +95,13 @@ export class AotPlugin implements Tapable {
   get compilerHost() { return this._compilerHost; }
   get compilerOptions() { return this._compilerOptions; }
   get done() { return this._donePromise; }
-  get entryModule() {
-    const splitted = this._entryModule.split('#');
-    const path = splitted[0];
-    const className = splitted[1] || 'default';
-    return {path, className};
+  get entryModules(): EntryModule[] {
+    return this._entryModules.map(entryModule => {
+      const splitted = entryModule.split('#');
+      const path = splitted[0];
+      const className = splitted[1] || 'default';
+      return {path, className};
+    });
   }
   get genDir() { return this._genDir; }
   get program() { return this._program; }
@@ -267,17 +274,24 @@ export class AotPlugin implements Tapable {
     this._resourceLoader = new WebpackResourceLoader();
 
     if (options.entryModule) {
-      this._entryModule = options.entryModule;
+      this._entryModules = Array.isArray(options.entryModule) ?
+        options.entryModule : [options.entryModule];
     } else if ((tsConfig.raw['angularCompilerOptions'] as any)
             && (tsConfig.raw['angularCompilerOptions'] as any).entryModule) {
-      this._entryModule = path.resolve(this._basePath,
-        (tsConfig.raw['angularCompilerOptions'] as any).entryModule);
+      let entryModule: string[] | string =
+        (tsConfig.raw['angularCompilerOptions'] as any).entryModule;
+      if (!Array.isArray(entryModule)) {
+        entryModule = [entryModule];
+      }
+      this._entryModules = entryModule.map(modulePath => path.resolve(this._basePath, modulePath));
     }
 
     // still no _entryModule? => try to resolve from mainPath
-    if (!this._entryModule && options.mainPath) {
+    if (!this._entryModules && options.mainPath) {
       const mainPath = path.resolve(basePath, options.mainPath);
-      this._entryModule = resolveEntryModuleFromMain(mainPath, this._compilerHost, this._program);
+      this._entryModules = [
+        resolveEntryModuleFromMain(mainPath, this._compilerHost, this._program)
+      ];
     }
 
     if (options.hasOwnProperty('i18nFile')) {
@@ -334,11 +348,15 @@ export class AotPlugin implements Tapable {
   private _getLazyRoutesFromNgtools() {
     try {
       time('AotPlugin._getLazyRoutesFromNgtools');
-      const result = __NGTOOLS_PRIVATE_API_2.listLazyRoutes({
-        program: this._program,
-        host: this._compilerHost,
-        angularCompilerOptions: this._angularCompilerOptions,
-        entryModule: this._entryModule
+      const result = {};
+      this._entryModules.forEach(entryModule => {
+        const moduleResult = __NGTOOLS_PRIVATE_API_2.listLazyRoutes({
+          program: this._program,
+          host: this._compilerHost,
+          angularCompilerOptions: this._angularCompilerOptions,
+          entryModule,
+        });
+        Object.assign(result, moduleResult);
       });
       timeEnd('AotPlugin._getLazyRoutesFromNgtools');
       return result;
