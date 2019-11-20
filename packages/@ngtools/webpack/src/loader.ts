@@ -1,6 +1,6 @@
 import * as path from 'path';
 import * as ts from 'typescript';
-import {AotPlugin} from './plugin';
+import {AotPlugin, EntryModule} from './plugin';
 import {AngularCompilerPlugin} from './angular_compiler_plugin';
 import {TypeScriptFileRefactor} from './refactor';
 import {LoaderContext, ModuleReason} from './webpack';
@@ -192,12 +192,12 @@ function _removeDecorators(refactor: TypeScriptFileRefactor) {
 }
 
 
-function _getNgFactoryPath(plugin: AotPlugin, refactor: TypeScriptFileRefactor) {
+function _getNgFactoryPath(plugin: AotPlugin, refactor: TypeScriptFileRefactor,
+                            entryModule: EntryModule) {
   // Calculate the base path.
   const basePath = path.normalize(plugin.basePath);
   const genDir = path.normalize(plugin.genDir);
   const dirName = path.normalize(path.dirname(refactor.fileName));
-  const entryModule = plugin.entryModule;
   const entryModuleFileName = path.normalize(entryModule.path + '.ngfactory');
   const relativeEntryModulePath = path.relative(basePath, entryModuleFileName);
   const fullEntryModulePath = path.resolve(genDir, relativeEntryModulePath);
@@ -271,9 +271,10 @@ function _getCaller(node: ts.Node): ts.CallExpression | null {
 }
 
 
-function _replaceEntryModule(plugin: AotPlugin, refactor: TypeScriptFileRefactor) {
+function _replaceEntryModule(plugin: AotPlugin, refactor: TypeScriptFileRefactor,
+                              entryModule: EntryModule) {
   const modules = refactor.findAstNodes(refactor.sourceFile, ts.SyntaxKind.Identifier, true)
-    .filter(identifier => identifier.getText() === plugin.entryModule.className)
+    .filter(identifier => identifier.getText() === entryModule.className)
     .filter(identifier =>
       identifier.parent &&
       (identifier.parent.kind === ts.SyntaxKind.CallExpression ||
@@ -284,9 +285,9 @@ function _replaceEntryModule(plugin: AotPlugin, refactor: TypeScriptFileRefactor
     return;
   }
 
-  const factoryClassName = plugin.entryModule.className + 'NgFactory';
+  const factoryClassName = entryModule.className + 'NgFactory';
 
-  refactor.insertImport(factoryClassName, _getNgFactoryPath(plugin, refactor));
+  refactor.insertImport(factoryClassName, _getNgFactoryPath(plugin, refactor, entryModule));
 
   modules
     .forEach(reference => {
@@ -308,7 +309,9 @@ function _refactorBootstrap(plugin: AotPlugin, refactor: TypeScriptFileRefactor)
     return;
   }
 
-  _replaceEntryModule(plugin, refactor);
+  plugin.entryModules.forEach(entryModule => {
+    _replaceEntryModule(plugin, refactor, entryModule);
+  });
 }
 
 export function removeModuleIdOnlyForTesting(refactor: TypeScriptFileRefactor) {
@@ -478,7 +481,9 @@ export function _getModuleExports(plugin: AotPlugin,
     .filter(node => {
 
       const identifiers = refactor.findAstNodes(node, ts.SyntaxKind.Identifier, false)
-        .filter(node => node.getText() === plugin.entryModule.className);
+        .filter(node =>
+          plugin.entryModules.some(entryModule => node.getText() === entryModule.className)
+        );
 
       return identifiers.length > 0;
     }) as ts.Identifier[];
@@ -491,10 +496,12 @@ export function _replaceExport(plugin: AotPlugin, refactor: TypeScriptFileRefact
   }
   _getModuleExports(plugin, refactor)
     .forEach(node => {
-      const factoryPath = _getNgFactoryPath(plugin, refactor);
-      const factoryClassName = plugin.entryModule.className + 'NgFactory';
-      const exportStatement = `export \{ ${factoryClassName} \} from '${factoryPath}'`;
-      refactor.appendAfter(node, exportStatement);
+      plugin.entryModules.forEach(entryModule => {
+        const factoryPath = _getNgFactoryPath(plugin, refactor, entryModule);
+        const factoryClassName = entryModule.className + 'NgFactory';
+        const exportStatement = `export \{ ${factoryClassName} \} from '${factoryPath}'`;
+        refactor.appendAfter(node, exportStatement);
+      });
     });
 }
 
